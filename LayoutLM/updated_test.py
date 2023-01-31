@@ -1,221 +1,184 @@
-#### installing libs 
+
+## install tesseract OCR Engine
+! sudo apt install tesseract-ocr
+! sudo apt install libtesseract-dev
+## install pytesseract , please click restart runtime button in the cell output and move forward in the notebook
+! pip install pytesseract
+## install model requirements
+!pip install -q git+https://github.com/huggingface/transformers.git
+!pip install -q torch==1.8.0+cu101 torchvision==0.9.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+!python -m pip install -q 'git+https://github.com/facebookresearch/detectron2.git'
 
 
-!pip install -q gradio
-!pip install Pillow==9.1.0
-!pip install datasets
-!sudo apt install tesseract-ocr
-!pip install -q pytesseract
 
-
-import os
-os.system('pip install git+https://github.com/huggingface/transformers.git --upgrade')
-os.system('pip install pyyaml==5.1')
-# workaround: install old version of pytorch since detectron2 hasn't released packages for pytorch 1.9 (issue: https://github.com/facebookresearch/detectron2/issues/3158)
-os.system('pip install torch==1.8.0+cu101 torchvision==0.9.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html')
-
-# install detectron2 that matches pytorch 1.8
-# See https://detectron2.readthedocs.io/tutorials/install.html for instructions
-os.system('pip install -q detectron2 -f https://dl.fbaipublicfiles.com/detectron2/wheels/cu101/torch1.8/index.html')
-
-## install PyTesseract
-os.system('pip install -q pytesseract')
-
-import gradio as gr
+import pandas as pd
 import numpy as np
-from transformers import LayoutLMv2Processor, LayoutLMv2ForTokenClassification
-from datasets import load_dataset
+import torch
+import os
+import sys
+import json
+import logging
+
 from PIL import Image, ImageDraw, ImageFont
+from numpy.random import randint
+from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
+
+import warnings
+import gc
+warnings.filterwarnings('ignore')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-from transformers import LayoutLMv3ForTokenClassification
-from transformers import LayoutLMv3Processor
-processor = LayoutLMv3Processor.from_pretrained("microsoft/layoutlmv3-base")
-model = LayoutLMv3ForTokenClassification.from_pretrained("nielsr/layoutlmv3-finetuned-cord")
+model =  LayoutLMv3ForTokenClassification.from_pretrained("nielsr/layoutlmv3-finetuned-cord")
+model.to(device)
 
+#Helper functions
+def random_color():
+  return np.random.randint(0,255,3)
+def normalize_box(bbox,width,height):
+  return [
+          int(bbox[0]*(1000/width)),
+          int(bbox[1]*(1000/height)),
+          int(bbox[2]*(1000/width)),
+          int(bbox[3]*(1000/height)),
+  ]
 
-dataset = load_dataset("nielsr/cord-layoutlmv3", split="test")
+def compare_boxes(b1,b2):
+  b1 = np.array([c for c in b1])
+  b2 = np.array([c for c in b2])
+  equal = np.array_equal(b1,b2)
+  return equal
 
+def mergable(w1,w2):
+  if w1['label'] == w2['label']:
+    threshold = 7
+    if abs(w1['box'][1] - w2['box'][1]) < threshold or abs(w1['box'][-1] - w2['box'][-1]) < threshold:
+      return True
+    return False
+  return False
 
+imag_path = "/content/bill3.jpeg" 
+os.system(f'tesseract "{imag_path}" /content/tsv_output -l eng tsv')
 
+inference_processor = LayoutLMv3Processor.from_pretrained("microsoft/layoutlmv3-base")
+setattr(inference_processor.feature_extractor , "apply_ocr" , False)
 
+ocr_df = pd.read_csv("/content/tsv_output.tsv", sep='\t')
+ocr_df = ocr_df.dropna()
+ocr_df = ocr_df.drop(ocr_df[ocr_df.text.str.strip() == ''].index)
+text_output = ocr_df.text.tolist()
+doc_text = ' '.join(text_output)
 
-labels = dataset.features['ner_tags'].feature.names
-id2label = {v: k for v, k in enumerate(labels)}
-print(labels)
+  #read an image file for inference
+inference_image = Image.open(imag_path).convert('RGB')
+width, height = inference_image.size
 
-label2color1 = {"menu.nm" : "blue" ,
-                "menu.num" : 'green' , 
-                'menu.unitprice':'black' ,
-                'menu.cnt' : 'red',  
-                'menu.discountprice':'red' ,
-                'menu.price':'violet' ,
-                'menu.itemsubtotal':'violet',
-                'menu.vatyn':'violet',
-                'menu.etc':'violet',
-                'menu.sub_nm':'violet',
-                'menu.sub_unitprice':'violet',
-                'menu.sub_cnt':'violet',
-                'menu.sub_price':'violet',
-                'menu.sub_etc':'violet',
-                'void_menu.nm':'violet',
-                'void_menu.price':'violet',
-                'sub_total.subtotal_price':'violet',
-                'sub_total.discount_price':'violet',
-                'sub_total.service_price':'violet',
-                'sub_total.othersvc_price':'violet',
-                'sub_total.tax_price':'violet',
-                'sub_total.etc':'violet',
-                'total.total_price':'violet',
-                'total.total_etc':'violet',
-                'total.cashprice':'violet' ,
-                'total.changeprice':'violet',
-                'total.creditcardprice':'violet',
-                'total.emonryprice':'violet',
-                'total.menutype_cnt':'violet',
-                'total.menuqty_cnt':'violet',
-                'menu.nm':'violet',
-                'menu.num':'violet',
-                'menu.unitprice':'violet',
-                'menu.cnt':'violet',
-                'menu.discountprice':'violet',
-                'menu.price':'violet',
-                'menu.itemsubtotal':'violet',
-                'menu.vatyn':'violet',
-                'menu.etc':'violet',
-                'menu.sub_nm':'violet',
-                'menu.sub_unitprice':'violet',
-                'menu.sub_cnt':'violet',
-                'menu.sub_price':'violet',
-                'menu.sub_etc':'violet',
-                'void_menu.nm':'violet',
-                'void_menu.price':'violet',
-                'sub_total.subtotal_price':'violet',
-                'sub_total.discount_price':'violet',
-                'sub_total.service_price':'violet',
-                'sub_total.othersvc_price':'violet',
-                'sub_total.tax_price':'violet',
-                'sub_total.etc':'violet',
-                'total.total_price':'violet',
-                'total.total_etc':'violet',
-                'total.cashprice':'violet',
-                'total.changeprice':'violet',
-                'total.creditcardprice':'violet',
-                'total.emoneyprice':'violet',
-                'total.menutype_cnt':'violet',
-                'total.menuwty_cnt':'violet',
-                'other':'black'
+words = []
+for index,row in ocr_df.iterrows():
+  word = {}
+  origin_box = [row['left'],row['top'],row['left']+row['width'],row['top']+row['height']] 
+  word['word_text'] = row['text']
+  word['word_box'] = origin_box
+  word['normalized_box'] = normalize_box(word['word_box'],width, height)
+  words.append(word)
 
-               }
+boxlist = [word['normalized_box'] for word in words]
+wordlist = [word['word_text'] for word in words]
 
+encoding = inference_processor(inference_image,wordlist,boxes=boxlist,return_tensors="pt",padding="max_length", truncation=True) 
+for k,v in encoding.items():
+  encoding[k] = v.to(device)
 
-def unnormalize_box(bbox, width, height):
-     return [
-         width * (bbox[0] / 1000),
-         height * (bbox[1] / 1000),
-         width * (bbox[2] / 1000),
-         height * (bbox[3] / 1000),
-     ]
+model.eval()
 
-def iob_to_label(label):
-    label = label[2:]
-    if not label:
-      return 'other'
-    return label
+with torch.no_grad():
+  inference_outputs = model(**encoding)
+inference_outputs.logits.shape
 
+raw_input_ids = encoding['input_ids'][0].tolist()
+predictions = inference_outputs.logits.argmax(-1).squeeze().tolist()
+token_boxes = encoding.bbox.squeeze().tolist()
+special_tokens = [inference_processor.tokenizer.cls_token_id, inference_processor.tokenizer.sep_token_id, inference_processor.tokenizer.pad_token_id]
 
-def process_image(image):
-    width, height = image.size
+input_ids = [id for id in raw_input_ids if id not in special_tokens]
+predictions = [model.config.id2label[prediction] for i,prediction in enumerate(predictions) if not (raw_input_ids[i] in special_tokens)]
+actual_boxes = [box for i,box in enumerate(token_boxes) if not (raw_input_ids[i] in special_tokens )]
 
-    # encode
-    encoding = processor(image, truncation=True, return_offsets_mapping=True, return_tensors="pt")
-    offset_mapping = encoding.pop('offset_mapping')
+assert(len(actual_boxes) == len(predictions))
 
-    # forward pass
-    outputs = model(**encoding)
+for word in words:
+  word_labels = [] 
+  token_labels = []
+  word_tagging = None 
+  for i,box in enumerate(actual_boxes,start=0):
+    if compare_boxes(word['normalized_box'],box):
+      if predictions[i] != 'O':
+        word_labels.append(predictions[i][2:])
+      else:
+        word_labels.append('O')
+      token_labels.append(predictions[i])
+  if word_labels != []:
+    word_tagging =  word_labels[0] if word_labels[0] != 'O' else word_labels[-1]
+  else:
+    word_tagging = 'O'
+  word['word_labels'] = token_labels
+  word['word_tagging'] = word_tagging
 
-    # get predictions
-    predictions = outputs.logits.argmax(-1).squeeze().tolist()
-    token_boxes = encoding.bbox.squeeze().tolist()
+filtered_words = [{'id':i,'text':word['word_text'],
+                    'label':word['word_tagging'],
+                    'box':word['word_box'],
+                    'words':[{'box':word['word_box'],'text':word['word_text']}]} for i,word in enumerate(words) if word['word_tagging'] != 'O']
 
-    # only keep non-subword predictions
-    is_subword = np.array(offset_mapping.squeeze().tolist())[:,0] != 0
-    true_predictions = [id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]]
-    true_boxes = [unnormalize_box(box, width, height) for idx, box in enumerate(token_boxes) if not is_subword[idx]]
+merged_taggings = []
+for i,curr_word in enumerate(filtered_words):
+  skip = False
+  neighbors = lambda word:[neighbor for neighbor in filtered_words if mergable(word,neighbor)]
+  for items in merged_taggings:
+    for item in items:
+      if item in neighbors(curr_word):
+        skip = True
+        break
+    if skip:
+      break
+  if skip:
+    continue
+  merged_taggings.append(neighbors(curr_word))
 
+merged_words = []
+for i,merged_tagging in enumerate(merged_taggings):
+  if len(merged_tagging) > 1:
+    new_word = {}
+    merging_word = " ".join([word['text'] for word in merged_tagging])
+    merging_box = [merged_tagging[0]['box'][0]-5,merged_tagging[0]['box'][1]-10,merged_tagging[-1]['box'][2]+5,merged_tagging[-1]['box'][3]+10]
+    new_word['text'] = merging_word
+    new_word['box'] = merging_box
+    new_word['label'] = merged_tagging[0]['label']
+    new_word['id'] = filtered_words[-1]['id']+i+1
+    new_word['words'] = [{'box':word['box'],'text':word['text']} for word in merged_tagging]
+    merged_words.append(new_word)
 
+filtered_words.extend(merged_words)
+predictions = [word['label'] for word in filtered_words]
+actual_boxes = [word['box'] for word in filtered_words]
+unique_taggings = set(predictions)
 
-     # draw predictions over the image
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default()
-    for prediction, box in zip(true_predictions, true_boxes):
-        predicted_label = iob_to_label(prediction).lower()
-        draw.rectangle(box, outline=label2color1[predicted_label])
-        draw.text((box[0]+10, box[1]-10), text=predicted_label, fill=label2color1[predicted_label], font=font)
-    
-    return image
+label2color = {f'{label}':f'rgb({random_color()[0]},{random_color()[1]},{random_color()[2]})' for label in unique_taggings}
 
+inference_image = Image.open(imag_path).convert('RGB')
+draw = ImageDraw.Draw(inference_image)
+font = ImageFont.load_default()
+taggings = {}
+for prediction, box in zip(predictions, actual_boxes):
+    # predicted_label = iob_to_label(prediction).lower()
+    draw.rectangle(box, outline=label2color[prediction])
+    draw.text((box[0] + 10, box[1] - 10), text=prediction, fill=label2color[prediction], font=font)  
+doc_name = os.path.basename(imag_path)
+output_path = "/content/output/"
+os.makedirs(output_path,exist_ok=True)
+inference_image.save(f"{output_path}/imageOutput.png")
+dictionary = {"document name":doc_name,"document": doc_text , "form": filtered_words}
+with open(f"{output_path}/jsonOutput.json","w",encoding='utf8') as outfile:
+    json.dump(dictionary, outfile,ensure_ascii=False)
 
-
-def process_image(image):
-    width, height = image.size
-
-    # encode
-    encoding = processor(image, truncation=True, return_offsets_mapping=True, return_tensors="pt")
-    offset_mapping = encoding.pop('offset_mapping')
-
-    # forward pass
-    outputs = model(**encoding)
-
-    # get predictions
-    predictions = outputs.logits.argmax(-1).squeeze().tolist()
-    token_boxes = encoding.bbox.squeeze().tolist()
-
-    # only keep non-subword predictions
-    is_subword = np.array(offset_mapping.squeeze().tolist())[:,0] != 0
-    true_predictions = [id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]]
-    true_boxes = [unnormalize_box(box, width, height) for idx, box in enumerate(token_boxes) if not is_subword[idx]]
-
-
-
-     # draw predictions over the image
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default()
-    for prediction, box in zip(true_predictions, true_boxes):
-        predicted_label = iob_to_label(prediction).lower()
-        draw.rectangle(box, outline=label2color1[predicted_label])
-        draw.text((box[0]+10, box[1]-10), text=predicted_label, fill=label2color1[predicted_label], font=font)
-    
-    return image
-
-
-
-result = process_image(im)
-
-print(result)
-
-
-
-#### Using Gradio demo
-
-
-
-title = "Interactive demo: LayoutLMv3"
-description = "Demo for Microsoft's LayoutLMv3, a Transformer for state-of-the-art document image understanding tasks. This particular model is fine-tuned on FUNSD, a dataset of manually annotated forms. It annotates the words into QUESTION/ANSWER/HEADER/OTHER. To use it, simply upload an image or use the example image below. Results will show up in a few seconds."
-article = "LayoutLMv3: Multi-modal Pre-training for Visually-Rich Document Understanding | Github Repo"
-examples =[['bill2.jpg']]
-
-css = """.output_image, .input_image {height: 600px !important}"""
-
-iface = gr.Interface(fn=process_image, 
-                     inputs=gr.inputs.Image(type="pil"), 
-                     outputs=gr.outputs.Image(type="pil", label="annotated image"),
-                     title=title,
-                     description=description,
-                     article=article,
-                     examples=examples,
-                     css=css)
-                     
-iface.launch(debug=True)
 
 
